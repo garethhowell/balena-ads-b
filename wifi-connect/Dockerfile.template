@@ -1,0 +1,43 @@
+FROM debian:trixie-slim
+LABEL maintainer="https://github.com/ketilmo"
+ARG BALENA_ARCH=%%BALENA_ARCH%%
+
+RUN printf '%s\n' \
+        'path-exclude /usr/share/doc/*' \
+        'path-exclude /usr/share/man/*' \
+        'path-exclude /usr/share/groff/*' \
+        'path-exclude /usr/share/info/*' \
+        'path-exclude /usr/share/lintian/*' \
+        'path-exclude /usr/share/linda/*' \
+        'path-exclude /usr/share/locale/*' \
+        'path-include /usr/share/locale/en*' \
+        > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends tini dnsmasq wireless-tools curl ca-certificates && \
+    apt-get clean && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# renovate: datasource=github-releases depName=balena-os/wifi-connect
+ARG WIFI_CONNECT_VERSION=v4.11.84
+
+WORKDIR /usr/src/app/ui
+WORKDIR /usr/src/app
+
+RUN \
+    export BASE_URL="https://github.com/balena-os/wifi-connect/releases/download" && \
+    case "$BALENA_ARCH" in \
+        "aarch64") BINARY_ARCH_NAME="aarch64-unknown-linux-gnu" ;; \
+        "amd64")   BINARY_ARCH_NAME="x86_64-unknown-linux-gnu" ;; \
+        "armv7hf") BINARY_ARCH_NAME="armv7-unknown-linux-gnueabihf" ;; \
+        *) echo >&2 "error: unsupported architecture ($BALENA_ARCH)"; exit 1 ;; \
+    esac; \
+    curl -fLs "$BASE_URL/${WIFI_CONNECT_VERSION}/wifi-connect-${BINARY_ARCH_NAME}.tar.gz" \
+        | tar -xvz -C /usr/src/app/ && \
+    curl -fLs "$BASE_URL/${WIFI_CONNECT_VERSION}/wifi-connect-ui.tar.gz" \
+        | tar -xvz -C /usr/src/app/ui
+
+COPY start.sh .
+
+RUN chmod +x /usr/src/app/start.sh
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/src/app/start.sh"]

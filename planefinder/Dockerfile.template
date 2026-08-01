@@ -1,4 +1,4 @@
-FROM balenalib/%%BALENA_ARCH%%-debian:bullseye AS base
+FROM debian:trixie-slim AS base
 LABEL maintainer="https://github.com/ketilmo"
 
 EXPOSE 30053
@@ -10,26 +10,60 @@ ENV GOOGLE_MAPS_API_KEY=
 ENV RECEIVER_HOST=dump1090-fa
 ENV RECEIVER_PORT=30005
 
-ARG PERM_INSTALL="gettext-base wget tini" 
+ARG PERM_INSTALL="gettext-base tini ca-certificates curl"
 
-RUN apt update && \
-	apt install -y $PERM_INSTALL && \
-	apt clean && apt autoclean && apt autoremove && \
+RUN printf '%s\n' \
+		'path-exclude /usr/share/doc/*' \
+		'path-exclude /usr/share/man/*' \
+		'path-exclude /usr/share/groff/*' \
+		'path-exclude /usr/share/info/*' \
+		'path-exclude /usr/share/lintian/*' \
+		'path-exclude /usr/share/linda/*' \
+		'path-exclude /usr/share/locale/*' \
+		'path-include /usr/share/locale/en*' \
+		> /etc/dpkg/dpkg.cfg.d/01_nodoc && \
+	apt-get update && \
+	apt-get install -y --no-install-recommends $PERM_INSTALL && \
+	apt-get clean && apt-get autoremove -y && \
 	rm -rf /var/lib/apt/lists/*
 
 FROM base AS buildstep
 
-ARG PLANEFINDER_VERSION=5.0.161
+# Renovate tracks each ARG below via the planefinder-binary-<arch>
+# custom datasources defined in renovate.json, which scrape the
+# per-arch version matrix sdr-enthusiasts/docker-planefinder
+# maintains by hand against the same upstream:
+# https://github.com/sdr-enthusiasts/docker-planefinder/blob/main/Dockerfile
+ARG PLANEFINDER_VERSION_AMD64=5.3.29
+ARG PLANEFINDER_VERSION_ARM64=5.3.31
+ARG PLANEFINDER_VERSION_ARMHF=5.3.29
+ARG TEMP_INSTALL="wget"
+
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends $TEMP_INSTALL
+
+WORKDIR /tmp
 
 COPY planefinder_installer.sh /tmp
+RUN chmod +x /tmp/planefinder_installer.sh && \
+	PLANEFINDER_VERSION_AMD64="${PLANEFINDER_VERSION_AMD64}" \
+	PLANEFINDER_VERSION_ARM64="${PLANEFINDER_VERSION_ARM64}" \
+	PLANEFINDER_VERSION_ARMHF="${PLANEFINDER_VERSION_ARMHF}" \
+	./planefinder_installer.sh
+
+FROM base AS release
+
+COPY --from=buildstep /tmp/PlaneFinder.deb /tmp/
 COPY start.sh /
 COPY pfclient-config.json.tpl /etc
 
 WORKDIR /tmp
 
-RUN chmod +x /tmp/planefinder_installer.sh && \
-	./planefinder_installer.sh && \
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends ./PlaneFinder.deb && \
+	pfclient --version && \
 	chmod +x /start.sh && \
-	rm -rf /tmp/*
+	apt-get clean && apt-get autoremove -y && \
+	rm -rf /var/lib/apt/lists/* /tmp/*
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/start.sh"]

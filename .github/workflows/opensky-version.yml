@@ -1,0 +1,146 @@
+name: Mirror OpenSky package file
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  update-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 'master'
+
+      - name: Download arm64 Package File
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
+        with:
+          timeout_seconds: 60
+          max_attempts: 200
+          retry_wait_seconds: 180
+          shell: bash
+          command: |
+            aria2c \
+              --connect-timeout=30 \
+              --timeout=30 \
+              --lowest-speed-limit=10K \
+              --max-tries=1 \
+              --allow-overwrite=true \
+              -o opensky-network/.Packages.arm64 \
+              https://s3.opensky-network.org/website-public-repos/debian/dists/opensky/custom/binary-arm64/Packages
+
+      - name: Download amd64 Package File
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
+        with:
+          timeout_seconds: 60
+          max_attempts: 200
+          retry_wait_seconds: 180
+          shell: bash
+          command: |
+            aria2c \
+              --connect-timeout=30 \
+              --timeout=30 \
+              --lowest-speed-limit=10K \
+              --max-tries=1 \
+              --allow-overwrite=true \
+              -o opensky-network/.Packages.amd64 \
+              https://s3.opensky-network.org/website-public-repos/debian/dists/opensky/custom/binary-amd64/Packages
+
+      - name: Download armhf Package File
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
+        with:
+          timeout_seconds: 60
+          max_attempts: 200
+          retry_wait_seconds: 180
+          shell: bash
+          command: |
+            aria2c \
+              --connect-timeout=30 \
+              --timeout=30 \
+              --lowest-speed-limit=10K \
+              --max-tries=1 \
+              --allow-overwrite=true \
+              -o opensky-network/.Packages.armhf \
+              https://s3.opensky-network.org/website-public-repos/debian/dists/opensky/custom/binary-armhf/Packages
+
+      - name: Sync OPENSKY_VERSION in Dockerfile
+        shell: bash
+        run: |
+          versions=()
+          for arch in arm64 amd64 armhf; do
+            v=$(awk '
+              /^Package: opensky-feeder$/ { p=1; next }
+              /^Package: / { p=0 }
+              p && /^Version: / { print $2; exit }
+            ' "opensky-network/.Packages.${arch}")
+            if [ -z "$v" ]; then
+              echo "Could not parse opensky-feeder version from .Packages.${arch}" >&2
+              exit 1
+            fi
+            versions+=("$v")
+          done
+
+          unique=$(printf '%s\n' "${versions[@]}" | sort -u)
+          if [ "$(echo "$unique" | wc -l)" -ne 1 ]; then
+            echo "opensky-feeder version disagrees across architectures: ${versions[*]}" >&2
+            exit 1
+          fi
+
+          new_version="${versions[0]}"
+          sed -i "s|^ARG OPENSKY_VERSION=.*|ARG OPENSKY_VERSION=${new_version}|" \
+            opensky-network/Dockerfile.template
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          commit-message: Update OpenSky package files and version
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          base: master
+          branch: bot/update-opensky-package-file
+          delete-branch: true
+          title: Update OpenSky package files and version
+          body: Update OpenSky `Packages` indices for all supported architectures and bump `OPENSKY_VERSION` in `opensky-network/Dockerfile.template` so version and SHA256 land atomically.
+          add-paths: |
+            opensky-network/.Packages.arm64
+            opensky-network/.Packages.amd64
+            opensky-network/.Packages.armhf
+            opensky-network/Dockerfile.template
+
+  keepalive-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 'master'
+
+      - name: Update check time
+        run: echo $(date -u) > '.github/update-check-time.txt'
+        shell: bash
+
+      - name: Push latest check time
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        with:
+          commit_message: Update latest version check time
+          branch: bot/keepalive-update-check
+          create_branch: true
+          push_options: '--force'
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+          commit_author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          file_pattern: '.github/update-check-time.txt'
+  

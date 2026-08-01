@@ -2,32 +2,38 @@
 set -e
 
 arch="$(dpkg --print-architecture)"
-echo System Architecture: $arch
+echo "System Architecture: $arch"
 
-if [ "$arch" = "arm64" ]; then 
-	planefinder_arch="armhf"
-	dpkg --add-architecture armhf
-	apt update && \
-		apt install -y libc6:armhf libgcc1:armhf libidn2-0:armhf libunistring2:armhf
-elif [ "$arch" = "amd64" ]; then 
-	planefinder_arch="i386"
-	dpkg --add-architecture i386
-	apt update && \
-		apt install -y libc6:i386 libgcc1:i386 libidn2-0:i386 libunistring2:i386
-else 
-	planefinder_arch="armhf" 
-	apt-get update && \
-		apt install -y libc6
+# Per-arch version pins are passed in as separate env vars because
+# upstream releases pfclient asymmetrically across architectures.
+# See planefinder/Dockerfile.template for the tracking rationale.
+case "$arch" in
+	amd64)
+		planefinder_version="$PLANEFINDER_VERSION_AMD64"
+		;;
+	arm64)
+		planefinder_version="$PLANEFINDER_VERSION_ARM64"
+		;;
+	armhf)
+		planefinder_version="$PLANEFINDER_VERSION_ARMHF"
+		;;
+	*)
+		echo "Unsupported architecture for PlaneFinder: $arch" >&2
+		exit 1
+		;;
+esac
+
+if [ -z "$planefinder_version" ]; then
+	echo "PlaneFinder version pin for $arch is empty" >&2
+	exit 1
 fi
 
-planefinder_packet="pfclient_${PLANEFINDER_VERSION}_$planefinder_arch.deb"
+planefinder_packet="pfclient_${planefinder_version}_${arch}.deb"
 
 cd /tmp/
 
-wget -O PlaneFinder.deb http://client.planefinder.net/$planefinder_packet
-dpkg -i PlaneFinder.deb
-rm -rf PlaneFinder.deb
-
-apt purge wget && \
-	apt clean && apt autoclean && apt autoremove && \
-	rm -rf /var/lib/apt/lists/*
+# PlaneFinder does not publish checksums for the pfclient .deb, so the
+# download is unverified beyond TLS. Harden the wget call with explicit
+# timeouts and retries to fail fast on transient network issues.
+wget --tries=3 --timeout=60 --retry-connrefused \
+	-O PlaneFinder.deb "https://client.planefinder.net/$planefinder_packet"

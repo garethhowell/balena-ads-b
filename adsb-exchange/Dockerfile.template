@@ -1,10 +1,11 @@
-FROM balenalib/%%BALENA_ARCH%%-debian:bullseye AS base
+FROM debian:trixie-slim AS base
 LABEL maintainer="https://github.com/ketilmo"
 
 EXPOSE 30154 30157 31003 
 
 ENV ADSB_EXCHANGE_SITENAME=
 ENV ADSB_EXCHANGE_UUID=
+ENV ADSB_EXCHANGE_DEBUG=
 ENV LAT=
 ENV LON=
 ENV ALT=
@@ -12,35 +13,49 @@ ENV RECEIVER_HOST=dump1090-fa
 ENV RECEIVER_PORT=30005
 ENV DUMP978_ENABLED=false
 
-ARG PERM_INSTALL="curl socat gzip python3 python3-venv netcat dnsutils uuid-runtime zlib1g jq inotify-tools perl tini gettext-base"
+ARG PERM_INSTALL="curl ca-certificates socat gzip python3 python3-venv netcat-openbsd dnsutils uuid-runtime zlib1g libncurses6 jq inotify-tools perl tini gettext-base"
 
-RUN apt update && \
-	apt install -y $PERM_INSTALL && \
-	apt clean && apt autoclean && apt autoremove && \
+RUN printf '%s\n' \
+		'path-exclude /usr/share/doc/*' \
+		'path-exclude /usr/share/man/*' \
+		'path-exclude /usr/share/groff/*' \
+		'path-exclude /usr/share/info/*' \
+		'path-exclude /usr/share/lintian/*' \
+		'path-exclude /usr/share/linda/*' \
+		'path-exclude /usr/share/locale/*' \
+		'path-include /usr/share/locale/en*' \
+		> /etc/dpkg/dpkg.cfg.d/01_nodoc && \
+	apt-get update && \
+	apt-get install -y --no-install-recommends $PERM_INSTALL && \
+	apt-get clean && apt-get autoremove -y && \
 	rm -rf /var/lib/apt/lists/*
 
 FROM base AS buildstep
 
-ARG READSB_COMMIT=f535e517996ad04ce8126a58757a9b91a82fe542
-ARG MLAT_TAG=v0.4.2
-ARG TEMP_INSTALL="git build-essential debhelper libncurses5-dev zlib1g-dev python3-dev libzstd-dev"
+# renovate: datasource=github-tags depName=wiedehopf/readsb versioning=loose
+ARG READSB_VERSION=v3.16.15
+# MLAT_VERSION is the master-branch commit SHA of wiedehopf/mlat-client;
+# tracked by the git-refs custom manager in renovate.json.
+ARG MLAT_VERSION=28ae4f7409c9dfddd2bb8984baadce5d31fdc8e3
+ARG TEMP_INSTALL="git build-essential debhelper libncurses5-dev zlib1g-dev python3-dev libzstd-dev pkg-config"
 
 WORKDIR /tmp
 
-RUN apt update && \
-	apt install -y $TEMP_INSTALL
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends $TEMP_INSTALL
 
-RUN git clone --depth 1 --branch $MLAT_TAG https://github.com/adsb-related-code/mlat-client && \
+RUN git clone --single-branch https://github.com/wiedehopf/mlat-client && \
 	cd mlat-client && \
-    python3 -m venv /usr/local/share/adsbexchange/venv/ && \	
-    /usr/local/share/adsbexchange/venv/bin/python3 setup.py build && \	
-    /usr/local/share/adsbexchange/venv/bin/python3 setup.py install
+        git checkout ${MLAT_VERSION} && \
+    python3 -m venv /usr/local/share/adsbexchange/venv/ && \
+    /usr/local/share/adsbexchange/venv/bin/pip install --no-cache-dir setuptools pyasyncore && \
+    /usr/local/share/adsbexchange/venv/bin/pip install --no-cache-dir --no-build-isolation .
 
 WORKDIR /tmp
 
-RUN git clone --single-branch https://github.com/adsb-related-code/readsb && \
+RUN git clone --single-branch https://github.com/wiedehopf/readsb.git && \
 	cd readsb && \
-	git checkout $READSB_COMMIT && \
+	git checkout tags/${READSB_VERSION} && \
 	make -j3 AIRCRAFT_HASH_BITS=14
 
 WORKDIR /tmp
